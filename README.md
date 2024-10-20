@@ -29,7 +29,8 @@ The heatmaps correlate well with historical traffic data, identifying high-densi
 
 ### Determining Density and Traffic Levels
 Advanced image recognition techniques enable accurate assessments of traffic density and patterns. The analysis reveals peak traffic hours and frequent congestion points, offering a dynamic view of urban mobility. These insights can assist city planners and traffic managers in developing strategies to mitigate congestion.
-[times square traffic](timessquare.png)
+
+![times square traffic](timessquare.png)
 
 
 ## Conclusions
