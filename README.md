@@ -1,5 +1,5 @@
 # NYC AI Traffic Camera Analysis
-
+Using Object Recognition Models to extract features about traffic patterns from NYC's free traffic camera API.
 
 
 ## Introduction
