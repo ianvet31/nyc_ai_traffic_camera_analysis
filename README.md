@@ -1,6 +1,8 @@
 # NYC AI Traffic Camera Analysis
 Leveraging object recognition models to analyze traffic patterns from NYC's free traffic camera API.
 
+[Try out the notebook here](NYCAITrafficAnalysis.ipynb)
+
 ## Introduction
 AI-driven image recognition models, combined with traffic camera data, offer a powerful framework for analyzing urban traffic patterns. This project explores how traffic camera data can be processed to gain insights into vehicle and pedestrian behavior, assess traffic density, and track movement across the city, ultimately enhancing urban mobility and informing traffic management strategies.
 
