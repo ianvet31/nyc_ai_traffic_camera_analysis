@@ -29,6 +29,8 @@ The heatmaps correlate well with historical traffic data, identifying high-densi
 
 ### Determining Density and Traffic Levels
 Advanced image recognition techniques enable accurate assessments of traffic density and patterns. The analysis reveals peak traffic hours and frequent congestion points, offering a dynamic view of urban mobility. These insights can assist city planners and traffic managers in developing strategies to mitigate congestion.
+[times square traffic](timessquare.png)
+
 
 ## Conclusions
 Analyzing NYC traffic cameras with the COCO Image Recognition model yields valuable insights into urban traffic dynamics. Processing around 1,000 cameras in about 2 minutes provides real-time analytics that support city planning and traffic management. 
