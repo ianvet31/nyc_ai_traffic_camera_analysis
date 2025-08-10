@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NYC Traffic Camera Analysis</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        #map { height: 100vh; }
+        .popup-img { max-width: 300px; max-height: 200px; }
+        #sidebar {
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 180px;
+            height: 100vh;
+            background: #222;
+            color: #fff;
+            z-index: 1000;
+            padding: 20px 10px;
+            box-shadow: 2px 0 8px rgba(0,0,0,0.2);
+        }
+        #sidebar button {
+            display: block;
+            width: 100%;
+            margin-bottom: 10px;
+            padding: 10px;
+            background: #444;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        #sidebar button.active {
+            background: #0078d7;
+        }
+        #sidebar .filter-group {
+            margin-bottom: 20px;
+        }
+        #sidebar label {
+            display: block;
+            margin-bottom: 5px;
+            cursor: pointer;
+        }
+        #map { margin-left: 180px; }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <div class="filter-group">
+            <b>Filter Boroughs:</b>
+            <label><input type="checkbox" class="borough-filter" value="Manhattan" checked> Manhattan</label>
+            <label><input type="checkbox" class="borough-filter" value="Brooklyn" checked> Brooklyn</label>
+            <label><input type="checkbox" class="borough-filter" value="Queens" checked> Queens</label>
+            <label><input type="checkbox" class="borough-filter" value="Bronx" checked> Bronx</label>
+            <label><input type="checkbox" class="borough-filter" value="Staten Island" checked> Staten Island</label>
+        </div>
+        <button id="liveBtn" class="active">Live Cameras</button>
+        <button id="densityBtn">Traffic Density</button>
+    </div>
+    <div id="map"></div>
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+    <script>
+    let liveInterval = null;
+    let lastImgId = null;
+    let map, cameras, markers = [], heatLayer = null;
+    let trafficCounts = {}; // {cameraId: {cars: n, people: n}}
+    let currentView = 'live';
+    function getSelectedBoroughs() {
+        return Array.from(document.querySelectorAll('.borough-filter:checked')).map(cb => cb.value);
+    }
+    function startLiveFeed(imgId, imageUrl) {
+        if (liveInterval) clearInterval(liveInterval);
+        liveInterval = setInterval(() => {
+            const img = document.getElementById(imgId);
+            if (img) img.src = `${imageUrl}?t=${Date.now()}`;
+        }, 1000);
+        lastImgId = imgId;
+    }
+    function stopLiveFeed() {
+        if (liveInterval) clearInterval(liveInterval);
+        liveInterval = null;
+        lastImgId = null;
+    }
+    function showLiveView() {
+        currentView = 'live';
+        document.getElementById('liveBtn').classList.add('active');
+        document.getElementById('densityBtn').classList.remove('active');
+        if (heatLayer) {
+            map.removeLayer(heatLayer);
+            heatLayer = null;
+        }
+        markers.forEach(m => map.removeLayer(m));
+        const selectedBoroughs = getSelectedBoroughs();
+        cameras.forEach((cam, i) => {
+            if (selectedBoroughs.includes(cam.area) && markers[i]) {
+                markers[i].addTo(map);
+            }
+        });
+    }
+    function showDensityView() {
+        currentView = 'density';
+        document.getElementById('liveBtn').classList.remove('active');
+        document.getElementById('densityBtn').classList.add('active');
+        markers.forEach(m => map.removeLayer(m));
+        const selectedBoroughs = getSelectedBoroughs();
+        // Build heatmap data from trafficCounts
+        const heatData = cameras.map(cam => {
+            const tc = trafficCounts[cam.id];
+            const density = tc ? (tc.cars + tc.people) : 0;
+            return selectedBoroughs.includes(cam.area) ? [cam.latitude, cam.longitude, density] : null;
+        }).filter(d => d && d[2] > 0);
+        if (heatLayer) map.removeLayer(heatLayer);
+        if (heatData.length > 0) {
+            heatLayer = L.heatLayer(heatData, {radius: 25, blur: 15, maxZoom: 17}).addTo(map);
+            if (document.getElementById('density-msg')) {
+                document.body.removeChild(document.getElementById('density-msg'));
+            }
+        } else {
+            // If no density data, show a message and auto-dismiss
+            if (!document.getElementById('density-msg')) {
+                const msg = document.createElement('div');
+                msg.id = 'density-msg';
+                msg.style.position = 'absolute';
+                msg.style.top = '50%';
+                msg.style.left = '50%';
+                msg.style.transform = 'translate(-50%, -50%)';
+                msg.style.background = '#fff';
+                msg.style.color = '#222';
+                msg.style.padding = '20px';
+                msg.style.borderRadius = '8px';
+                msg.style.zIndex = 2000;
+                msg.innerText = 'No traffic density data yet. Populating from sample cameras...';
+                document.body.appendChild(msg);
+                setTimeout(() => {
+                    if (document.getElementById('density-msg')) {
+                        document.body.removeChild(document.getElementById('density-msg'));
+                    }
+                }, 3000);
+            }
+            // Run object detection on a sample of cameras to populate density
+            let sample = cameras.filter(cam => selectedBoroughs.includes(cam.area)).slice(0, 20); // sample first 20 filtered cameras
+            sample.forEach(cam => {
+                if (!trafficCounts[cam.id]) {
+                    fetch('http://localhost:8000/detect', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({image_url: cam.imageUrl, threshold: 0.3})
+                    })
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.traffic_assessment) {
+                            trafficCounts[cam.id] = data.traffic_assessment;
+                            showDensityView(); // re-render heatmap as data arrives
+                        }
+                    });
+                }
+            });
+        }
+    }
+    fetch('/static/cameras.json')
+      .then(res => res.json())
+      .then(data => {
+        cameras = data;
+        map = L.map('map').setView([40.7128, -74.0060], 12);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+        cameras.forEach(cam => {
+          if (cam.latitude && cam.longitude) {
+            const marker = L.marker([cam.latitude, cam.longitude]);
+            markers.push(marker);
+            const imgId = `live-img-${cam.id}`;
+            const popupContent = `
+                <b>${cam.name}</b><br>
+                <img id='${imgId}' class='popup-img' src='${cam.imageUrl}?t=${Date.now()}' /><br>
+                <button onclick="runDetection('${cam.imageUrl}', this, '${cam.id}')">Run Object Detection</button>
+                <div id='result-${cam.id}'></div>
+            `;
+            marker.bindPopup(popupContent);
+            marker.on('popupopen', function() {
+                startLiveFeed(imgId, cam.imageUrl);
+            });
+            marker.on('popupclose', function() {
+                stopLiveFeed();
+            });
+            marker.addTo(map);
+          }
+        });
+        document.getElementById('liveBtn').onclick = showLiveView;
+        document.getElementById('densityBtn').onclick = showDensityView;
+        document.querySelectorAll('.borough-filter').forEach(cb => {
+            cb.onchange = () => {
+                if (currentView === 'live') {
+                    showLiveView();
+                } else {
+                    showDensityView();
+                }
+            };
+        });
+      });
+    window.runDetection = function(imageUrl, btn, camId) {
+        btn.disabled = true;
+        btn.innerText = 'Running...';
+        fetch('http://localhost:8000/detect', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({image_url: imageUrl, threshold: 0.3})
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) {
+                btn.innerText = 'Error';
+                document.getElementById('result-' + btn.parentElement.id).innerText = data.error;
+                return;
+            }
+            btn.innerText = 'Done';
+            const imgTag = `<img class='popup-img' src='data:image/jpeg;base64,${data.image}' /><br>`;
+            const assess = `<b>Traffic Assessment:</b> Cars: ${data.traffic_assessment.cars}, People: ${data.traffic_assessment.people}`;
+            btn.parentElement.innerHTML += imgTag + assess;
+            // Save traffic counts for density view
+            trafficCounts[camId] = data.traffic_assessment;
+        })
+        .catch(() => { btn.innerText = 'Error'; });
+    }
+    </script>
+</body>
+</html>

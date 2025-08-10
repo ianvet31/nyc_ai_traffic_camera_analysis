@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NYC Traffic Cameras</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+        .leaflet-popup-content-wrapper {
+            border-radius: 8px;
+        }
+        .leaflet-popup-content {
+            margin: 13px 19px;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        .camera-feed {
+            width: 100%;
+            max-width: 400px;
+            height: auto;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="map"></div>
+
+    <script>
+        // --- Camera Data ---
+        // This data is loaded from the JSON file you provided.
+        const cameras = [
+            {
+               "id":"8d2b3ae9-da68-4d37-8ae2-d3bc014f827b",
+               "name":"WBB - 2 NOR @ ABOVE BEDFORD AVE & S 5 St",
+               "latitude":40.710983,
+               "longitude":-73.963168,
+               "area":"Brooklyn",
+               "isOnline":"true",
+               "imageUrl":"https://webcams.nyctmc.org/api/cameras/8d2b3ae9-da68-4d37-8ae2-d3bc014f827b/image"
+            },
+            {
+               "id":"0bbea8bd-10f1-4126-b3c5-9e9432eab749",
+               "name":"Atlantic Ave @ Pennsylvania Ave",
+               "latitude":40.675787,
+               "longitude":-73.896898,
+               "area":"Brooklyn",
+               "isOnline":"true",
+               "imageUrl":"https://webcams.nyctmc.org/api/cameras/0bbea8bd-10f1-4126-b3c5-9e9432eab749/image"
+            },
+            {
+               "id":"07b8616e-373e-4ec9-89cc-11cad7d59fcb",
+               "name":"Worth St @ Centre St",
+               "latitude":40.715157,
+               "longitude":-74.00213,
+               "area":"Manhattan",
+               "isOnline":"true",
+               "imageUrl":"https://webcams.nyctmc.org/api/cameras/07b8616e-373e-4ec9-89cc-11cad7d59fcb/image"
+            },
+            {
+               "id":"c5040f93-f4ec-4803-8370-8b931b0443e2",
+               "name":"FDR Dr @ 64 St",
+               "latitude":40.761186,
+               "longitude":-73.955676,
+               "area":"Manhattan",
+               "isOnline":"true",
+               "imageUrl":"https://webcams.nyctmc.org/api/cameras/c5040f93-f4ec-4803-8370-8b931b0443e2/image"
+            },
+            {
+               "id":"ddc62c2f-dab2-48e0-918e-742e62e78ec1",
+               "name":"Fort Hamilton Pkwy @ 60 St",
+               "latitude":40.6332,
+               "longitude":-74.0057,
+               "area":"Brooklyn",
+               "isOnline":"true",
+               "imageUrl":"https://webcams.nyctmc.org/api/cameras/ddc62c2f-dab2-48e0-918e-742e62e78ec1/image"
+            },
+            {
+               "id":"1b874f5c-e1c6-481d-bb85-8d7d92c1793b",
+               "name":"Rogers Ave @ Montgomery St",
+               "latitude":40.6656,
+               "longitude":-73.9536,
+               "area":"Brooklyn",
+               "isOnline":"true",
+               "imageUrl":"https://webcams.nyctmc.org/api/cameras/1b874f5c-e1c6-481d-bb85-8d7d92c1793b/image"
+            },
+            {
+               "id":"88895623-f6fa-4509-a927-8eae076725da",
+               "name":"Ft. Hamilton Pkwy @ McDonald Ave",
+               "latitude":40.647697,
+               "longitude":-73.980373,
+               "area":"Brooklyn",
+               "isOnline":"true",
+               "imageUrl":"https://webcams.nyctmc.org/api/cameras/88895623-f6fa-4509-a927-8eae076725da/image"
+            },
+            {
+               "id":"52399045-4691-4258-8f82-12000f5719a8",
+               "name":"Jamaica Ave @ 168 St",
+               "latitude":40.706371,
+               "longitude":-73.792539,
+               "area":"Queens",
+               "isOnline":"true",
+               "imageUrl":"https://webcams.nyctmc.org/api/cameras/52399045-4691-4258-8f82-12000f5719a8/image"
+            },
+            {
+               "id":"04ffc69c-92a7-4c02-aa18-2b16e7ba81f2",
+               "name":"FDR Dr @ 36 St",
+               "latitude":40.744441,
+               "longitude":-73.971242,
+               "area":"Manhattan",
+               "isOnline":"true",
+               "imageUrl":"https://webcams.nyctmc.org/api/cameras/04ffc69c-92a7-4c02-aa18-2b16e7ba81f2/image"
+            },
+            {
+               "id":"03a8a2da-3ac2-45aa-a5ba-4ff7d1ecbd22",
+               "name":"5 Ave @ 47 St",
+               "latitude":40.756725,
+               "longitude":-73.97883,
+               "area":"Manhattan",
+               "isOnline":"true",
+               "imageUrl":"https://webcams.nyctmc.org/api/cameras/03a8a2da-3ac2-45aa-a5ba-4ff7d1ecbd22/image"
+            }
+            // ... more camera data would be included here
+        ];
+
+        // --- Map Initialization ---
+        // Create a Leaflet map centered on New York City.
+        const map = L.map('map').setView([40.7128, -74.0060], 12);
+
+        // Add a tile layer from OpenStreetMap.
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        // --- Add Camera Markers ---
+        // Loop through the camera data and add a marker for each camera.
+        cameras.forEach(camera => {
+            if (camera.latitude && camera.longitude) {
+                const marker = L.marker([camera.latitude, camera.longitude]).addTo(map);
+
+                // Create the popup content with the camera name and live feed.
+                const popupContent = `
+                    <div class="font-semibold text-gray-800">${camera.name}</div>
+                    <img src="${camera.imageUrl}" alt="Live feed from ${camera.name}" class="camera-feed" onerror="this.onerror=null;this.src='https://placehold.co/400x300/e2e8f0/4a5568?text=Feed+Offline';">
+                `;
+
+                // Bind the popup to the marker.
+                marker.bindPopup(popupContent, {
+                    maxWidth: 400
+                });
+            }
+        });
+    </script>
+</body>
+</html>
