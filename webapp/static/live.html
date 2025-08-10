@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NYC Traffic Camera Analysis - Live Cameras</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+    <div class="sidebar" id="sidebar">
+        <div class="filter-group">
+            <b>Filter Boroughs:</b>
+            <label><input type="checkbox" class="borough-filter" value="Manhattan" checked> Manhattan</label>
+            <label><input type="checkbox" class="borough-filter" value="Brooklyn"> Brooklyn</label>
+            <label><input type="checkbox" class="borough-filter" value="Queens"> Queens</label>
+            <label><input type="checkbox" class="borough-filter" value="Bronx"> Bronx</label>
+            <label><input type="checkbox" class="borough-filter" value="Staten Island"> Staten Island</label>
+        </div>
+        <button id="liveBtn" class="btn active">Live Cameras</button>
+        <a href="/density" class="btn" id="densityBtn">Traffic Density</a>
+        <a href="/tracker" class="btn" id="trackerBtn">Tracker Mode</a>
+    </div>
+    <div id="map"></div>
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="/static/js/common.js"></script>
+    <script>
+    let map, cameras, markers = [], liveInterval = null, lastImgId = null;
+    function startLiveFeed(imgId, imageUrl) {
+        if (liveInterval) clearInterval(liveInterval);
+        liveInterval = setInterval(() => {
+            const img = document.getElementById(imgId);
+            if (img) img.src = `${imageUrl}?t=${Date.now()}`;
+        }, 2000);
+        lastImgId = imgId;
+    }
+    function stopLiveFeed() {
+        if (liveInterval) clearInterval(liveInterval);
+        liveInterval = null;
+        lastImgId = null;
+    }
+    // Floating panel for full-window live feed
+    function openCameraPanel(camId){
+        const cam = cameras.find(c=>c.id===camId);
+        if(!cam) return;
+        // Create panel container
+        const panel = document.createElement('div');
+        panel.className = 'floating-panel';
+        panel.style.left = '240px';
+        panel.style.top = '60px';
+        panel.style.width = '800px';
+        panel.style.height = '520px';
+        panel.style.zIndex = 4200;
+        // Header
+        const header = document.createElement('div');
+        header.className = 'floating-header';
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.textContent = cam.name || 'Live View';
+        const actions = document.createElement('div');
+        actions.className = 'actions';
+        const fitBtn = document.createElement('button');
+        fitBtn.className = 'btn-icon';
+        fitBtn.textContent = 'Fit';
+        const detectBtn = document.createElement('button');
+        detectBtn.className = 'btn-icon';
+        detectBtn.textContent = 'Detect';
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'close';
+        closeBtn.innerHTML = '&times;';
+        actions.appendChild(fitBtn);
+        actions.appendChild(detectBtn);
+        actions.appendChild(closeBtn);
+        header.appendChild(title);
+        header.appendChild(actions);
+        panel.appendChild(header);
+    // Body: wrap img + canvas stacked
+    const feedWrap = document.createElement('div');
+    feedWrap.style.position = 'relative';
+    feedWrap.style.margin = '8px auto';
+    feedWrap.style.lineHeight = '0';
+    panel.appendChild(feedWrap);
+    const img = document.createElement('img');
+    img.className = 'feed-img';
+    img.id = `panel-img-${cam.id}`;
+    img.src = `${cam.imageUrl}?t=${Date.now()}`;
+    img.style.margin = '0';
+    img.style.maxHeight = 'none';
+    feedWrap.appendChild(img);
+    const canvas = document.createElement('canvas');
+    canvas.style.position = 'absolute';
+    canvas.style.left = '0';
+    canvas.style.top = '0';
+    canvas.style.pointerEvents = 'auto';
+    feedWrap.appendChild(canvas);
+        // Loading/Status
+        const status = document.createElement('div');
+        status.style.position = 'absolute';
+        status.style.right = '10px';
+        status.style.bottom = '10px';
+        status.style.background = '#222';
+        status.style.color = '#fff';
+        status.style.padding = '6px 10px';
+        status.style.borderRadius = '6px';
+        panel.appendChild(status);
+        document.body.appendChild(panel);
+        // Dragging via header only to avoid resize conflicts
+        header.addEventListener('mousedown', (e)=>e.stopPropagation());
+        makeDraggable(panel, header);
+        // Live refresher scoped to this panel
+        let panelInterval = setInterval(()=>{ img.src = `${cam.imageUrl}?t=${Date.now()}`; }, 3000);
+        closeBtn.onclick = () => { clearInterval(panelInterval); panel.remove(); };
+        fitBtn.onclick = () => { panel.classList.toggle('maximized'); syncCanvasToImage(); drawBoxes(lastObjects); };
+        // Detection overlay
+        let lastObjects = [];
+        function syncCanvasToImage(){
+            const pad = 16;
+            const headerH = header.clientHeight || 40;
+            const maxW = panel.clientWidth - pad*2;
+            const maxH = panel.clientHeight - headerH - 60;
+            const iw = img.naturalWidth || 1280;
+            const ih = img.naturalHeight || 720;
+            const scale = Math.min(maxW/iw, maxH/ih);
+            const w = Math.max(1, Math.floor(iw*scale));
+            const h = Math.max(1, Math.floor(ih*scale));
+            img.width = w; img.height = h;
+            img.style.width = w+'px'; img.style.height = h+'px';
+            canvas.width = w; canvas.height = h;
+            canvas.style.width = w+'px'; canvas.style.height = h+'px';
+            feedWrap.style.width = w+'px'; feedWrap.style.height = h+'px';
+        }
+        function drawBoxes(objects){
+            syncCanvasToImage();
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            if(!objects||!objects.length) return;
+            const sx = img.width/(img.naturalWidth||img.width);
+            const sy = img.height/(img.naturalHeight||img.height);
+            ctx.strokeStyle = '#ff0';
+            ctx.lineWidth = 3;
+            ctx.font = '16px Arial';
+            ctx.fillStyle = '#ff0';
+            objects.forEach(o=>{
+                const [x1,y1,x2,y2]=o.box;
+                const bx=x1*sx, by=y1*sy, bw=(x2-x1)*sx, bh=(y2-y1)*sy;
+                ctx.strokeRect(bx,by,bw,bh);
+                ctx.fillText(o.class, bx+4, by+18);
+            });
+        }
+        function runPanelDetection(){
+            status.textContent = 'Detecting...';
+            fetch('http://localhost:8000/detect',{
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({image_url: cam.imageUrl, threshold: 0.3})
+            })
+            .then(r=>r.json())
+            .then(d=>{ lastObjects = d.objects||[]; drawBoxes(lastObjects); status.textContent = `Cars:${d.traffic_assessment?.cars||0} People:${d.traffic_assessment?.people||0}`; })
+            .catch(()=>{ status.textContent = 'Detection error'; });
+        }
+        detectBtn.onclick = runPanelDetection;
+        img.onload = ()=>{ syncCanvasToImage(); drawBoxes(lastObjects); };
+        window.addEventListener('resize', ()=>{ syncCanvasToImage(); drawBoxes(lastObjects); });
+        if (window.ResizeObserver){ const ro = new ResizeObserver(()=>{ syncCanvasToImage(); drawBoxes(lastObjects); }); ro.observe(panel); }
+    }
+    fetch('/static/cameras.json')
+      .then(res => res.json())
+      .then(data => {
+        cameras = data;
+        map = initBaseMap();
+        const selectedBoroughs = getSelectedBoroughs();
+        cameras.forEach((cam, i) => {
+          if (selectedBoroughs.includes(cam.area) && cam.latitude && cam.longitude) {
+            const marker = L.marker([cam.latitude, cam.longitude]);
+            markers.push(marker);
+            const imgId = `live-img-${cam.id}`;
+            const popupContent = `
+                <b>${cam.name}</b><br>
+                <img id='${imgId}' class='popup-img' src='${cam.imageUrl}?t=${Date.now()}' /><br>
+                <button onclick=\"runDetection('${cam.imageUrl}', this, '${cam.id}')\" class='btn' style='margin-top:8px;'>Run Object Detection</button>
+                <button onclick=\"openCameraPanel('${cam.id}')\" class='btn' style='margin-top:8px;'>Open in Window</button>
+                <div id='result-${cam.id}'></div>
+            `;
+            marker.bindPopup(popupContent);
+            marker.on('popupopen', function(e) {
+                startLiveFeed(imgId, cam.imageUrl);
+                // Make popup draggable
+                if (e && e.popup) makePopupDraggable(e.popup);
+            });
+            marker.on('popupclose', function() {
+                stopLiveFeed();
+            });
+            marker.addTo(map);
+          } else {
+            markers.push(null);
+          }
+        });
+        wireBoroughFilters(() => {
+            markers.forEach(m => { if (m) map.removeLayer(m); });
+            const selectedBoroughs2 = getSelectedBoroughs();
+            cameras.forEach((cam, i) => {
+                if (selectedBoroughs2.includes(cam.area) && markers[i]) {
+                    markers[i].addTo(map);
+                }
+            });
+        });
+      });
+    window.runDetection = function(imageUrl, btn, camId) {
+        btn.disabled = true;
+        btn.innerText = 'Running...';
+        fetch('http://localhost:8000/detect', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({image_url: imageUrl, threshold: 0.3})
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) {
+                btn.innerText = 'Error';
+                const resultDiv = document.getElementById('result-' + camId);
+                if (resultDiv) resultDiv.innerText = data.error;
+                return;
+            }
+            btn.innerText = 'Done';
+            const imgTag = `<img class='popup-img' src='data:image/jpeg;base64,${data.image}' /><br>`;
+            const assess = `<b>Traffic Assessment:</b> Cars: ${data.traffic_assessment.cars}, People: ${data.traffic_assessment.people}`;
+            const resultDiv = document.getElementById('result-' + camId);
+            if (resultDiv) resultDiv.innerHTML = imgTag + assess;
+        })
+        .catch(() => { btn.innerText = 'Error'; })
+        .finally(() => { setTimeout(() => { btn.disabled = false; btn.innerText = 'Run Object Detection'; }, 1500); });
+    }
+    </script>
+</body>
+</html>

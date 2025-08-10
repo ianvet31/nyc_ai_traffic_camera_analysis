@@ -1,0 +1,37 @@
+:root{--bg:#0f172a;--panel:#111827;--text:#e5e7eb;--muted:#9ca3af;--brand:#3b82f6;--brand-600:#2563eb;--card:#1f2937}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;font-family:Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";background:var(--bg);color:var(--text)}
+#map{height:100vh;margin-left:220px}
+.sidebar{position:fixed;inset:0 auto 0 0;width:220px;background:var(--panel);color:var(--text);z-index:1000;padding:18px 14px;border-right:1px solid rgba(255,255,255,.06)}
+.sidebar h1{font-size:14px;font-weight:600;letter-spacing:.02em;margin:0 0 10px;color:var(--muted)}
+.btn{display:block;width:100%;margin:8px 0;padding:10px 12px;background:#1f2937;color:#e5e7eb;border:1px solid rgba(255,255,255,.08);border-radius:8px;cursor:pointer;text-align:center;transition:.15s}
+.btn.active{background:var(--brand);border-color:transparent}
+.btn:hover{background:#273244}
+.filter-group{margin-bottom:18px}
+.filter-group label{display:block;margin:6px 0;cursor:pointer;font-size:13px;color:var(--text)}
+.card{position:fixed;top:16px;right:20px;z-index:3000;background:var(--card);border:1px solid rgba(255,255,255,.06);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,.25);padding:10px;max-width:160px}
+.card img{max-width:120px;max-height:120px;border-radius:6px;display:block;margin:auto}
+.card .subtitle{display:block;font-size:12px;color:var(--muted);margin-top:6px;text-align:center}
+.popup-img{max-width:320px;max-height:220px}
+.leaflet-container a{color:var(--brand)}
+.leaflet-control-attribution{background:transparent;color:var(--muted);border:none}
+
+/* Draggable, resizable floating panels */
+.floating-panel{position:absolute;z-index:4000;background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.35);resize:both;overflow:auto;min-width:280px;min-height:180px}
+.floating-panel.maximized{position:fixed;left:220px;top:0;width:calc(100vw - 220px);height:100vh;border-radius:0}
+.floating-header{cursor:move;user-select:none;background:rgba(255,255,255,.06);border-bottom:1px solid rgba(255,255,255,.08);padding:8px 12px;display:flex;align-items:center;justify-content:space-between}
+.floating-header .title{font-size:13px;color:var(--text)}
+.floating-header .close{border:none;background:transparent;color:var(--muted);font-size:20px;line-height:16px;cursor:pointer}
+.floating-header .actions{display:flex;gap:8px}
+.floating-header .btn-icon{border:1px solid rgba(255,255,255,.1);background:rgba(255,255,255,.05);color:var(--muted);font-size:14px;line-height:14px;cursor:pointer;border-radius:6px;padding:4px 8px}
+
+/* Make Leaflet popups resizable; we will also make them draggable via JS */
+.leaflet-popup{resize:both;overflow:auto;}
+.leaflet-popup-content{margin:12px;}
+.leaflet-popup-content-wrapper{position:relative}
+.popup-drag-handle{position:absolute;left:0;top:-10px;height:10px;width:100%;cursor:move}
+.leaflet-popup{z-index:3500}
+
+/* Responsive feed image inside panels */
+.feed-img{display:block;width:calc(100% - 16px);height:auto;max-height:calc(100% - 120px);margin:8px auto;object-fit:contain}

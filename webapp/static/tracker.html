@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NYC Traffic Camera Analysis - Tracker Mode</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+    <div class="sidebar" id="sidebar">
+        <div class="filter-group">
+            <b>Filter Boroughs:</b>
+            <label><input type="checkbox" class="borough-filter" value="Manhattan" checked> Manhattan</label>
+            <label><input type="checkbox" class="borough-filter" value="Brooklyn"> Brooklyn</label>
+            <label><input type="checkbox" class="borough-filter" value="Queens"> Queens</label>
+            <label><input type="checkbox" class="borough-filter" value="Bronx"> Bronx</label>
+            <label><input type="checkbox" class="borough-filter" value="Staten Island"> Staten Island</label>
+        </div>
+        <a href="/live" class="btn" id="liveBtn">Live Cameras</a>
+        <a href="/density" class="btn" id="densityBtn">Traffic Density</a>
+        <button id="trackerBtn" class="btn active">Tracker Mode</button>
+    </div>
+    <div id="map"></div>
+    <div id="tracker-overlay" style="display:none;"></div>
+    <div id="tracker-target-preview" class="card"></div>
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="/static/js/common.js"></script>
+    <script>
+    let map, cameras, markers = [], trackerIcon = null, trackerTarget = null;
+    let trackerLiveInterval = null;
+    let detectionInProgress = false;
+    let searchInterval = null;
+    function getSelectedBoroughs() {
+        return Array.from(document.querySelectorAll('.borough-filter:checked')).map(cb => cb.value);
+    }
+    function showTrackerTargetPreview(target) {
+        const preview = document.getElementById('tracker-target-preview');
+        // Initialize preview as a floating, draggable, resizable panel once
+        if (!preview.dataset.inited) {
+            preview.dataset.inited = '1';
+            preview.className = 'floating-panel';
+            // Start near top-right
+            preview.style.position = 'fixed';
+            const initW = 220, initH = 220, margin = 20;
+            preview.style.width = initW + 'px';
+            preview.style.height = initH + 'px';
+            preview.style.left = (window.innerWidth - initW - margin) + 'px';
+            preview.style.top = '16px';
+            preview.style.right = 'auto';
+            preview.style.resize = 'both';
+            preview.style.overflow = 'auto';
+            preview.style.zIndex = 4200;
+            // Let the body fill available space so the image can scale with resize
+            preview.style.display = 'flex';
+            preview.style.flexDirection = 'column';
+            // Header
+            const header = document.createElement('div');
+            header.className = 'floating-header';
+            header.id = 'tracker-preview-header';
+            const title = document.createElement('div');
+            title.className = 'title';
+            title.id = 'tracker-preview-title';
+            title.textContent = 'Tracking';
+            header.appendChild(title);
+            preview.appendChild(header);
+            header.addEventListener('mousedown', (e)=>e.stopPropagation());
+            if (typeof makeDraggable === 'function') makeDraggable(preview, header);
+            // Body
+            const body = document.createElement('div');
+            body.id = 'tracker-preview-body';
+            body.style.padding = '8px';
+            body.style.flex = '1 1 auto';
+            body.style.overflow = 'hidden';
+            const imgWrap = document.createElement('div');
+            imgWrap.id = 'tracker-preview-imgwrap';
+            imgWrap.style.width = '100%';
+            imgWrap.style.height = '100%';
+            imgWrap.style.display = 'block';
+            body.appendChild(imgWrap);
+            preview.appendChild(body);
+        }
+        if (!target) {
+            preview.style.display = 'none';
+            const imgWrap = document.getElementById('tracker-preview-imgwrap');
+            if (imgWrap) imgWrap.innerHTML = '';
+            return;
+        }
+        preview.style.display = 'block';
+        const titleEl = document.getElementById('tracker-preview-title');
+        const imgWrapEl = document.getElementById('tracker-preview-imgwrap');
+        if (titleEl) titleEl.textContent = `Tracking: ${target.class}`;
+        // If we captured a cropped preview from the exact displayed frame, use it directly
+        if (target.previewDataUrl) {
+            if (imgWrapEl) imgWrapEl.innerHTML = `<img src='${target.previewDataUrl}' style='width:100%;height:100%;object-fit:contain;border-radius:6px;display:block;margin:0;' />`;
+            return;
+        }
+        if (imgWrapEl) imgWrapEl.textContent = `Processing preview...`;
+        // Use /proxy_image endpoint for cropping; prefer the frame URL we clicked on
+        const imageUrl = target.image || cameras.find(c => c.id === target.camId)?.imageUrl;
+        const proxiedUrl = `/proxy_image?url=${encodeURIComponent(imageUrl)}`;
+        const img = new window.Image();
+        img.crossOrigin = 'anonymous';
+        img.src = proxiedUrl;
+        img.onload = function() {
+            const [x1, y1, x2, y2] = target.box;
+            const w = x2 - x1;
+            const h = y2 - y1;
+            if (w > 0 && h > 0 && x1 >= 0 && y1 >= 0 && x2 <= img.naturalWidth && y2 <= img.naturalHeight) {
+                const canvas = document.createElement('canvas');
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, x1, y1, w, h, 0, 0, w, h);
+                if (imgWrapEl) imgWrapEl.innerHTML = `<img src='${canvas.toDataURL()}' style='width:100%;height:100%;object-fit:contain;border-radius:6px;display:block;margin:0;' />`;
+            } else {
+                if (imgWrapEl) imgWrapEl.innerHTML = `<img src='${img.src}' style='width:100%;height:100%;object-fit:contain;border-radius:6px;display:block;margin:0;' />`;
+            }
+        };
+        img.onerror = function() {
+            if (imgWrapEl) imgWrapEl.textContent = `Image load failed.`;
+        };
+    }
+    function trackerCameraClicked(cam, marker) {
+        // Always allow opening a new camera feed and selecting a new target
+        if (trackerLiveInterval) clearInterval(trackerLiveInterval);
+        detectionInProgress = false;
+        const overlay = document.getElementById('tracker-overlay');
+        overlay.innerHTML = '';
+        overlay.style.display = 'block';
+    overlay.className = 'floating-panel';
+    overlay.style.left = '220px';
+    overlay.style.top = '40px';
+    overlay.style.width = '720px';
+    overlay.style.height = '480px';
+    overlay.style.zIndex = 4000;
+        // Add close button
+        const header = document.createElement('div');
+    header.className = 'floating-header';
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = cam.name || 'Live View';
+        const actions = document.createElement('div');
+        actions.className = 'actions';
+        const maxBtn = document.createElement('button');
+        maxBtn.className = 'btn-icon';
+        maxBtn.textContent = 'Fit';
+        const closeBtn = document.createElement('button');
+    closeBtn.className = 'close';
+    closeBtn.innerHTML = '&times;';
+        closeBtn.onclick = function(e) {
+            overlay.style.display = 'none';
+            clearInterval(trackerLiveInterval);
+        };
+        maxBtn.onclick = function(){
+            overlay.classList.toggle('maximized');
+            syncCanvasToImage();
+            drawBoxes(lastObjects);
+        };
+        actions.appendChild(maxBtn);
+        actions.appendChild(closeBtn);
+        header.appendChild(title);
+        header.appendChild(actions);
+    overlay.appendChild(header);
+    // Feed container to stack image and canvas
+    const feedWrap = document.createElement('div');
+    feedWrap.style.position = 'relative';
+    feedWrap.style.margin = '8px auto';
+    feedWrap.style.lineHeight = '0';
+    overlay.appendChild(feedWrap);
+    // Show image
+    const img = document.createElement('img');
+    img.id = 'tracker-live-img';
+    img.src = `/proxy_image?url=${encodeURIComponent(cam.imageUrl)}&t=${Date.now()}`;
+    img.className = 'feed-img';
+    img.style.zIndex = 2002;
+    img.style.margin = '0';
+    img.style.maxHeight = 'none';
+    feedWrap.appendChild(img);
+    // Canvas for bounding boxes (overlay)
+    const canvas = document.createElement('canvas');
+    canvas.id = 'tracker-canvas';
+    canvas.style.position = 'absolute';
+    canvas.style.left = '0';
+    canvas.style.top = '0';
+    canvas.style.zIndex = 2003;
+    canvas.style.pointerEvents = 'auto';
+    feedWrap.appendChild(canvas);
+        // Loading indicator
+        const loading = document.createElement('div');
+        loading.id = 'tracker-loading';
+        loading.innerText = 'Detecting objects...';
+    loading.style.position = 'absolute';
+    loading.style.right = '10px';
+    loading.style.bottom = '10px';
+    loading.style.background = '#222';
+    loading.style.color = '#fff';
+    loading.style.padding = '6px 10px';
+    loading.style.borderRadius = '6px';
+    loading.style.zIndex = 2004;
+        overlay.appendChild(loading);
+        let lastObjects = [];
+        let lastImageUrl = '';
+        let hoveredBoxIdx = -1;
+        function syncCanvasToImage() {
+            // Container padding estimate
+            const pad = 16;
+            const maxW = overlay.clientWidth - pad * 2;
+            const maxH = overlay.clientHeight - header.clientHeight - 60; // space for footer/labels
+            const iw = img.naturalWidth || 1280;
+            const ih = img.naturalHeight || 720;
+            const scale = Math.min(maxW / iw, maxH / ih);
+            const w = Math.max(1, Math.floor(iw * scale));
+            const h = Math.max(1, Math.floor(ih * scale));
+            img.width = w;
+            img.height = h;
+            img.style.width = w + 'px';
+            img.style.height = h + 'px';
+            canvas.width = w;
+            canvas.height = h;
+            canvas.style.width = w + 'px';
+            canvas.style.height = h + 'px';
+            // Match wrapper to image for proper overlay alignment
+            feedWrap.style.width = w + 'px';
+            feedWrap.style.height = h + 'px';
+        }
+        function drawBoxes(objects) {
+            syncCanvasToImage();
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (!objects || !objects.length) return;
+            objects.forEach((obj, idx) => {
+                const [x1, y1, x2, y2] = obj.box;
+                const scaleX = img.width / img.naturalWidth;
+                const scaleY = img.height / img.naturalHeight;
+                const bx1 = x1 * scaleX;
+                const by1 = y1 * scaleY;
+                const bw = (x2-x1) * scaleX;
+                const bh = (y2-y1) * scaleY;
+                ctx.strokeStyle = (idx === hoveredBoxIdx) ? '#0ff' : '#ff0';
+                ctx.lineWidth = (idx === hoveredBoxIdx) ? 5 : 3;
+                ctx.strokeRect(bx1, by1, bw, bh);
+                ctx.font = '18px Arial';
+                ctx.fillStyle = '#ff0';
+                ctx.fillText(obj.class, bx1 + 4, by1 + 20);
+            });
+        }
+        function refreshTracker() {
+            img.src = `/proxy_image?url=${encodeURIComponent(cam.imageUrl)}&t=${Date.now()}`;
+            lastImageUrl = img.src;
+            loading.style.display = 'block';
+            fetch('http://localhost:8000/detect', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({image_url: cam.imageUrl, threshold: 0.3})
+            })
+            .then(res => res.json())
+            .then(data => {
+                loading.style.display = 'none';
+                lastObjects = data.objects || [];
+                drawBoxes(lastObjects);
+            })
+            .catch(() => {
+                loading.innerText = 'Detection error.';
+                lastObjects = [];
+                drawBoxes(lastObjects);
+            });
+        }
+        img.onload = function() {
+            syncCanvasToImage();
+            drawBoxes(lastObjects);
+        };
+    window.addEventListener('resize', () => {
+            syncCanvasToImage();
+            drawBoxes(lastObjects);
+        });
+    if (window.ResizeObserver) {
+        const ro = new ResizeObserver(() => {
+            syncCanvasToImage();
+            drawBoxes(lastObjects);
+        });
+        ro.observe(overlay);
+    }
+    // Make overlay draggable by header only to avoid conflicts with resize
+    header.addEventListener('mousedown', (e)=>e.stopPropagation());
+    makeDraggable(overlay, header);
+        trackerLiveInterval = setInterval(refreshTracker, 10000);
+        refreshTracker(); // Initial load
+        // Canvas mousemove for hover effect
+        canvas.onmousemove = function(e) {
+            if (!lastObjects.length) return;
+            // Use feedWrap rect to avoid margin/padding offsets
+            const rect = feedWrap.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+            hoveredBoxIdx = -1;
+            for (let i = 0; i < lastObjects.length; i++) {
+                const obj = lastObjects[i];
+                const [x1, y1, x2, y2] = obj.box;
+                const bx1 = x1 * (canvas.width / (img.naturalWidth || canvas.width));
+                const by1 = y1 * (canvas.height / (img.naturalHeight || canvas.height));
+                const bx2 = x2 * (canvas.width / (img.naturalWidth || canvas.width));
+                const by2 = y2 * (canvas.height / (img.naturalHeight || canvas.height));
+                if (x >= bx1 && x <= bx2 && y >= by1 && y <= by2) {
+                    hoveredBoxIdx = i;
+                    break;
+                }
+            }
+            drawBoxes(lastObjects);
+        };
+        // Click handler for canvas
+        canvas.onclick = function(e) {
+            if (!lastObjects.length) return;
+            const rect = feedWrap.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const x = (e.clientX - rect.left) * scaleX;
+            const y = (e.clientY - rect.top) * scaleY;
+            for (let i = 0; i < lastObjects.length; i++) {
+                const obj = lastObjects[i];
+                const [x1, y1, x2, y2] = obj.box;
+                const bx1 = x1 * (canvas.width / (img.naturalWidth || canvas.width));
+                const by1 = y1 * (canvas.height / (img.naturalHeight || canvas.height));
+                const bx2 = x2 * (canvas.width / (img.naturalWidth || canvas.width));
+                const by2 = y2 * (canvas.height / (img.naturalHeight || canvas.height));
+                if (x >= bx1 && x <= bx2 && y >= by1 && y <= by2) {
+                    // Create an exact preview crop from the currently displayed (proxied) image
+                    let px1 = Math.max(0, Math.floor(x1));
+                    let py1 = Math.max(0, Math.floor(y1));
+                    let px2 = Math.min(img.naturalWidth, Math.floor(x2));
+                    let py2 = Math.min(img.naturalHeight, Math.floor(y2));
+                    const pw = Math.max(1, px2 - px1);
+                    const ph = Math.max(1, py2 - py1);
+                    let previewDataUrl = null;
+                    try {
+                        const cropCanvas = document.createElement('canvas');
+                        cropCanvas.width = pw; cropCanvas.height = ph;
+                        const cctx = cropCanvas.getContext('2d');
+                        cctx.drawImage(img, px1, py1, pw, ph, 0, 0, pw, ph);
+                        previewDataUrl = cropCanvas.toDataURL();
+                    } catch (err) {
+                        // ignore, will fallback to proxy fetch in preview
+                    }
+                    trackerTarget = {class: obj.class, image: lastImageUrl, box: obj.box, camId: cam.id, previewDataUrl};
+                    overlay.style.display = 'none';
+                    if (trackerIcon) map.removeLayer(trackerIcon);
+                    trackerIcon = L.marker([cam.latitude, cam.longitude], {
+                        icon: L.icon({
+                            iconUrl: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/274c.png',
+                            iconSize: [32,32]
+                        })
+                    }).addTo(map);
+                    showTrackerTargetPreview(trackerTarget);
+                    clearInterval(trackerLiveInterval);
+                    startNearbySearch(trackerTarget);
+                    break;
+                }
+            }
+        };
+    }
+    function haversine(lat1, lon1, lat2, lon2) {
+        const R = 3958.8; // Radius of Earth in miles
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c;
+    }
+    function startNearbySearch(target) {
+        if (searchInterval) clearInterval(searchInterval);
+        const SEARCH_RADIUS = 0.2; // miles
+        let searchQueue = [];
+        let queueIdx = 0;
+        function buildQueue() {
+            const lastCam = cameras.find(c => c.id === target.camId);
+            if (!lastCam) return [];
+            return cameras
+                .filter(c => c.id !== lastCam.id && haversine(lastCam.latitude, lastCam.longitude, c.latitude, c.longitude) <= SEARCH_RADIUS)
+                .map(c => ({cam: c, dist: haversine(lastCam.latitude, lastCam.longitude, c.latitude, c.longitude)}))
+                .sort((a, b) => a.dist - b.dist)
+                .map(obj => obj.cam);
+        }
+        searchQueue = buildQueue();
+        queueIdx = 0;
+        searchInterval = setInterval(() => {
+            if (!searchQueue.length) return;
+            // Reset all marker icons to default except tracker and current
+            markers.forEach((m, i) => {
+                if (!m) return;
+                if (cameras[i].id !== target.camId && searchQueue.some(q => q.id === cameras[i].id)) {
+                    m.setIcon(L.icon({
+                        iconUrl: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f7e1.png', // yellow circle
+                        iconSize: [32,32]
+                    }));
+                } else if (cameras[i].id !== target.camId) {
+                    m.setIcon(new L.Icon.Default());
+                }
+            });
+            const cam = searchQueue[queueIdx % searchQueue.length];
+            // Search for target in camera using similarity
+            const preview = document.getElementById('tracker-target-preview');
+            const imgTag = preview.querySelector('img');
+            if (!imgTag) return;
+            fetch(imgTag.src)
+              .then(res => res.blob())
+              .then(blob => {
+                const formData = new FormData();
+                formData.append('image_url', cam.imageUrl);
+                formData.append('target_image', blob, 'target.png');
+                fetch('http://localhost:8000/search_similar', {
+                    method: 'POST',
+                    body: formData
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.found) {
+                        // Move tracker icon to this camera
+                        if (trackerIcon) map.removeLayer(trackerIcon);
+                        trackerIcon = L.marker([cam.latitude, cam.longitude], {
+                            icon: L.icon({iconUrl: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/274c.png', iconSize: [32,32]})
+                        }).addTo(map);
+                        target.camId = cam.id;
+                        searchQueue = buildQueue();
+                        queueIdx = 0;
+                    } else {
+                        queueIdx = (queueIdx + 1) % searchQueue.length;
+                    }
+                });
+              });
+        }, 15000); // Search one camera every 15 seconds
+    }
+    // Load cameras.json and initialize map/markers
+    fetch('/static/cameras.json')
+      .then(res => res.json())
+      .then(data => {
+        cameras = data;
+        map = L.map('map').setView([40.7128, -74.0060], 12);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+        const selectedBoroughs = getSelectedBoroughs();
+        cameras.forEach((cam, i) => {
+          if (selectedBoroughs.includes(cam.area) && cam.latitude && cam.longitude) {
+            const marker = L.marker([cam.latitude, cam.longitude]);
+            markers.push(marker);
+            marker.on('click', function() {
+                trackerCameraClicked(cam, marker);
+            });
+            marker.addTo(map);
+          } else {
+            markers.push(null);
+          }
+        });
+        document.querySelectorAll('.borough-filter').forEach(cb => {
+            cb.onchange = () => {
+                markers.forEach(m => { if (m) map.removeLayer(m); });
+                const selectedBoroughs = getSelectedBoroughs();
+                cameras.forEach((cam, i) => {
+                    if (selectedBoroughs.includes(cam.area) && markers[i]) {
+                        markers[i].addTo(map);
+                    }
+                });
+            };
+        });
+      });
+    </script>
+</body>
+</html>
